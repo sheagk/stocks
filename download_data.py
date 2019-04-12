@@ -5,6 +5,7 @@
 # then do it again for 1 day in the future.
 
 import os
+import re
 import urllib.request
 import pandas as pd
 import numpy as np
@@ -29,6 +30,18 @@ def load_symbols(exchange, df=None, sector_to_index_lookup=None):
     if exchange == 'nasdaq':
         this_df = this_df.drop(columns='ADR TSO')
 
+    else:
+        # have to convert the market cap into a number
+        this_df['MarketCap'] = this_df['MarketCap'].apply(lambda x:
+            float(x.replace('M', 'e6').replace('B', 'e9').strip('$')) if pd.notnull(x)
+            else np.nan)
+
+        # also have to capitalize industry column name
+        this_df = this_df.rename({'industry':'Industry'}, axis='columns')
+
+    # replace NaNs in the sectors...
+    this_df['Sector'] = this_df['Sector'].apply(lambda x:  x if pd.notnull(x) else 'Unknown')
+
     unnamed_keys = [k for k in this_df.keys() if k.startswith('Unnamed')]
     for k in unnamed_keys:
         if np.isfinite(this_df[k]).any():
@@ -36,20 +49,7 @@ def load_symbols(exchange, df=None, sector_to_index_lookup=None):
         else:
             this_df = this_df.drop(columns=k)
 
-    # # turn the sectors into 1 hot encoding...
-    # if sector_to_index_lookup is None:
-    #     sector_to_index_lookup = {}
-
-    # sectors = np.unique(df['Sector'])
-    # coded_sectors = np.array(list(sector_to_index_lookup.keys()))
-    # sectors_to_add = np.setdiff1d(sectors, coded_sectors)
-
-    # next_index = np.max(list(sector_to_index_lookup.vals())) + 1
-    # for sector in sectors_to_add:
-    #     sector_to_index_lookup[sector] = next_index
-    #     next_index += 1
-
-    # this_df['coded_sector'] = this_df['Sector'].apply(sector_to_index_lookup)
+    # may need to alter symbol depending on the exchange, since there can be dupes...
 
     if df is None:
         return this_df
@@ -57,7 +57,7 @@ def load_symbols(exchange, df=None, sector_to_index_lookup=None):
         return df.append(this_df)
 
 
-def extract_training_series(df, ending_dates):
+def extract_training_data(df, ending_dates):
     """
     ok, the input df should have the time series as well as the info in the symbols list,
     and this will return a dataframe that has the stuff I want to train on 
@@ -67,16 +67,28 @@ def extract_training_series(df, ending_dates):
     of the differences),  
     """
     training_df = pd.DataFrame()
+
+    # market cap is easy
     training_df['log_market_cap'] = np.log10(df['MarketCap'])
     
-    encoded_sector = pd.get_dummies(df['Sector'])
+    # use one-hot encoding to do the sector
+    # first clean up to try to minimize duplicates
+    # -- make all lowercase and replace non-alphanumeric with _
+    clean_sector = df['Sector'].apply(lambda x:  
+        re.sub('[^0-9a-zA-Z]+', '_', x.lower()))
+
+    encoded_sector = pd.get_dummies(clean_sector)
     for sector in encoded_sector:
-        training_df['sector'] = encoded_sector[sector]
+        training_df[sector] = encoded_sector[sector]
+
+    for date in ending_dates:
+        pass
+
 
     
     return training_df    
 
-def extract_targets(df):
+def extract_targets(df, ending_dates):
 
 
 
@@ -103,4 +115,15 @@ def add_symbol_to_dataframe(df, symbol):
     """
 
     this_df = df.read_csv(symbol_fname(symbol))
+
+
+def __main__():
+    symbol_list = None
+    for exchange in ['nasdaq', 'amex', 'nyse']:
+        symbol_list = load_symbols(exchange, symbol_list)
+
+    # randomly re-order the symbols:
+    symbol_list = symbol_list.reindex(np.random.permutation(symbol_list.index))
+
+
 
