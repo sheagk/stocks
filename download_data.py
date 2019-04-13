@@ -6,6 +6,8 @@
 
 import os
 import re
+import time
+import tqdm
 import urllib.request
 import pandas as pd
 import numpy as np
@@ -16,11 +18,11 @@ root_dir = os.path.expanduser('~')+'/stocks/'
 stock_dir = root_dir + '/symbols/'
 master_fname = root_dir + 'reduced_data.csv'
 
-symbol_fname = lambda symbol:  stock_dir+symbol+datatype
+symbol_fname = lambda symbol:  stock_dir+symbol+'.'+datatype
 
-# api key for alpha should be stored as in a non-checked-in text file 
+# api key for alphavantage should be stored as in a non-checked-in text file 
 with open(root_dir+'alpha_api_key') as f:
-    apikey = f.readline()
+    apikey = f.readline().strip()
 
 def load_symbols(exchange, df=None, sector_to_index_lookup=None):
     assert exchange in ['nasdaq', 'amex', 'nyse']
@@ -39,6 +41,9 @@ def load_symbols(exchange, df=None, sector_to_index_lookup=None):
         # also have to capitalize industry column name
         this_df = this_df.rename({'industry':'Industry'}, axis='columns')
 
+    # store the exchange:
+    this_df['Exchange'] = exchange
+
     # replace NaNs in the sectors...
     this_df['Sector'] = this_df['Sector'].apply(lambda x:  x if pd.notnull(x) else 'Unknown')
 
@@ -54,7 +59,7 @@ def load_symbols(exchange, df=None, sector_to_index_lookup=None):
     if df is None:
         return this_df
     else:
-        return df.append(this_df)
+        return df.append(this_df, ignore_index=True)
 
 
 def extract_training_data(df, ending_dates):
@@ -89,7 +94,7 @@ def extract_training_data(df, ending_dates):
     return training_df    
 
 def extract_targets(df, ending_dates):
-
+    pass
 
 
 
@@ -97,14 +102,13 @@ def download_symbol(symbol, function='TIME_SERIES_WEEKLY_ADJUSTED'):
     """
     save historical data for a stock symbol to a local file
     """
-    url = 'https://www.alphavantage.co/query?'
-          'function={}&symbol={}}&apikey={}}&datatype={}'.format(
-            function, symbol, apikey, datatype)
+    url = ('https://www.alphavantage.co/query?function={}&symbol={}&apikey={}&datatype={}'.format(
+            function, symbol, apikey, datatype))
 
     urllib.request.urlretrieve(url, symbol_fname(symbol))  
 
 
-def add_symbol_to_dataframe(df, symbol):
+def load_symbol_performance(symbol, df=None):
     """
     add the information for a single symbol to an overarching dataframe
     
@@ -113,17 +117,50 @@ def add_symbol_to_dataframe(df, symbol):
     such as the sector, and umm....other stuff.  those can (i think) be
     extra rows that aren't 
     """
+    this_df = pd.read_csv(symbol_fname(symbol), parse_dates=['timestamp'])
+    this_df['Symbol'] = symbol
 
-    this_df = df.read_csv(symbol_fname(symbol))
+    if df is None:
+        return this_df
+    else:
+        return df.append(this_df)
 
-
-def __main__():
+def download_all_symbols():
     symbol_list = None
     for exchange in ['nasdaq', 'amex', 'nyse']:
         symbol_list = load_symbols(exchange, symbol_list)
 
-    # randomly re-order the symbols:
+    # randomly re-order the list:
     symbol_list = symbol_list.reindex(np.random.permutation(symbol_list.index))
+
+    # drop the first instance of the 12 symbols that are listed in two exchanges
+    symbol_list.drop_duplicates('Symbol', inplace=True)
+
+    # select symbols that are not "preferred stocks", 
+    # since I can't figure out how to grab those via alphavantage's API
+    symbol_list = symbol_list.loc[symbol_list['Symbol'].map(lambda x:  '^' not in x)]
+
+    # clean up any white space, cause that shouldn't exist in any of them
+    symbol_list['Symbol'] = symbol_list['Symbol'].apply(lambda x: x.strip())
+
+    # now start downloading the data:
+    for symbol in tqdm.tqdm(symbol_list['Symbol']):
+        if not os.path.isfile(symbol_fname(symbol)):
+            download_symbol(symbol)
+
+            with open(symbol_fname(symbol), 'r') as f:
+                if f.readline()[0] == '{':  #downloading as CSV, so this only happens if we go too fast
+                    print("Looks like we failed to download {}".format(symbol))
+                    print("Will remove then take a short break before continuing; rerun later to fix")
+                    os.remove(symbol_fname(symbol))
+                    time.sleep(20)
+
+            # rate limit the downloads to ~5 per minute:
+            time.sleep(15)
+
+
+def load_all_symbols_performance():
+    pass
 
 
 
