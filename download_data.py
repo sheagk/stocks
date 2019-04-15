@@ -155,8 +155,8 @@ def download_all_symbols():
                     os.remove(symbol_fname(symbol))
                     time.sleep(20)
 
-            # rate limit the downloads to ~5 per minute:
-            time.sleep(15)
+            # rate limit the downloads to 500 per day:
+            time.sleep(24*60*60/500)
 
 
 def load_all_symbols_performance():
