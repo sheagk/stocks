@@ -11,10 +11,11 @@ import tqdm
 import urllib.request
 import pandas as pd
 import numpy as np
+from copy import deepcopy
 
 datatype = 'csv'
 
-root_dir = os.path.expanduser('~')+'/stocks/'
+root_dir = os.path.expanduser('~')+'/projects/stocks/'
 stock_dir = root_dir + '/symbols/'
 master_fname = root_dir + 'reduced_data.csv'
 
@@ -24,7 +25,7 @@ symbol_fname = lambda symbol:  stock_dir+symbol+'.'+datatype
 with open(root_dir+'alpha_api_key') as f:
     apikey = f.readline().strip()
 
-def load_symbols(exchange, df=None, sector_to_index_lookup=None):
+def load_symbols_in_one_exchange(exchange, df=None):
     assert exchange in ['nasdaq', 'amex', 'nyse']
     this_df = pd.read_csv(root_dir+'companylist_{}.csv'.format(exchange))
 
@@ -55,6 +56,7 @@ def load_symbols(exchange, df=None, sector_to_index_lookup=None):
             this_df = this_df.drop(columns=k)
 
     # may need to alter symbol depending on the exchange, since there can be dupes...
+    # don't seem to be running across this problem though
 
     if df is None:
         return this_df
@@ -94,6 +96,12 @@ def extract_training_data(df, ending_dates):
     return training_df    
 
 def extract_targets(df, ending_dates):
+    """
+    extract what I want the model to predict.  returns a series 
+
+    I want to predict the fractional change over some next time...one week I guess
+    """
+
     pass
 
 
@@ -108,30 +116,73 @@ def download_symbol(symbol, function='TIME_SERIES_WEEKLY_ADJUSTED'):
     urllib.request.urlretrieve(url, symbol_fname(symbol))  
 
 
-def load_symbol_performance(symbol, df=None):
+def load_symbol_data(symbol, symbol_list, df=None):
     """
     add the information for a single symbol to an overarching dataframe
     
     so basically, at the end, i want a column for each date and a row for
     each symbol.  i also want some extra information in the dataframe, 
-    such as the sector, and umm....other stuff.  those can (i think) be
-    extra rows that aren't 
+    such as the sector, and time series data that should all be stationary:
+
+    -- change in volume
+    -- fractional change in volume
+
+    -- change in adjusted close
+    -- fractional change in adjusted close
+
+    -- change in adjusted high 
+    -- fractional change in adjusted high
+
+    -- difference between high and low in a given time period    
     """
-    this_df = pd.read_csv(symbol_fname(symbol), parse_dates=['timestamp'])
-    this_df['Symbol'] = symbol
 
+    # get the sector, market cap, exchange, and industry from the symbol_list
+    symbol_row = symbol_list.loc[symbol_list['Symbol'] == symbol]
+
+    # load the information for a single symbol and index it by the date
+    date_column_name = 'timestamp'
+    input_df = pd.read_csv(symbol_fname(symbol), 
+        parse_dates=[date_column_name], index_col=date_column_name)
+
+    # get the total change in each column over a 1 week period
+    change_df = input_df - input_df.shift()
+    
+    # create a new dataframe to store the output numbers we care about
+    output_df = pd.DataFrame()
+    output_df['timestamp'] = input_df.index
+    output_df.set_index('timestamp', inplace=True)
+    
+    # store the metadata -- only going to be useful when I stack a bunch 
+    # of them together, which I'm not up to yet, but let's be forward 
+    # thinking and include them now
+    for key in ['Sector', 'MarketCap', 'Industry', 'Symbol']:
+        output_df[key] = symbol_row[key].item()
+
+    output_df['high-low'] = input_df['high'] - input_df['low']
+    for key in ['adjusted close', 'high', 'volume']:
+        output_df['delta_'+key] = change_df[key]
+        output_df['fractional_delta_'+key] = (
+            output_df['delta_'+key] / input_df[key])
+
+    output_df.dropna(inplace=True)
+    
     if df is None:
-        return this_df
+        return output_df
     else:
-        return df.append(this_df)
+        return df.append(output)
 
-def download_all_symbols():
+
+def load_full_symbol_list(reorder=True):
+    """
+    load, sanitize, and (optionally) reorder the full list of symbols
+    """
     symbol_list = None
     for exchange in ['nasdaq', 'amex', 'nyse']:
-        symbol_list = load_symbols(exchange, symbol_list)
+        symbol_list = load_symbols_in_one_exchange(exchange, symbol_list)
 
-    # randomly re-order the list:
-    symbol_list = symbol_list.reindex(np.random.permutation(symbol_list.index))
+    if reorder:
+        # randomly re-order the list:
+        symbol_list = symbol_list.reindex(np.random.permutation(symbol_list.index))
 
     # drop the first instance of the 12 symbols that are listed in two exchanges
     symbol_list.drop_duplicates('Symbol', inplace=True)
@@ -142,6 +193,12 @@ def download_all_symbols():
 
     # clean up any white space, cause that shouldn't exist in any of them
     symbol_list['Symbol'] = symbol_list['Symbol'].apply(lambda x: x.strip())
+
+    return symbol_list
+
+
+def download_all_symbols():
+    symbol_list = load_full_symbol_list()
 
     # now start downloading the data:
     for symbol in tqdm.tqdm(symbol_list['Symbol']):
