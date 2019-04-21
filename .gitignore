@@ -1,3 +1,4 @@
 alpha_api_key
 *~
 *.orig
+.ipynb_checkpoints
